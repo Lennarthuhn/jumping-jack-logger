@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Jumping Jack Logger</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; background: #000; color: #fff; overflow: hidden; }
+        .container { position: relative; width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; }
+        #webcam { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+        #output_canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+        #status { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 8px; }
+        .alert-box { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 3rem; color: #0f0; font-weight: bold; display: none; text-shadow: 0 0 10px #000; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <video id="webcam" autoplay playsinline></video>
+        <canvas id="output_canvas"></canvas>
+        <div id="status">Warten auf Kamera...</div>
+        <div id="alert-box" class="alert-box">🏃 HAMPELMANN!</div>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const statusElement = document.getElementById('status');
+        const alertElement = document.getElementById('alert-box');
+
+        // State Machine für Hampelmänner
+        let lastTriggerTime = 0;
+        let currentState = "DOWN"; // "UP", "DOWN"
+        let count = 0;
+        let lastActionTime = Date.now();
+        const RESET_TIMEOUT_MS = 10000; // Reset nach 10s Inaktivität
+
+        function onResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            if (results.poseLandmarks) {
+                drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, {color: '#00FF00', lineWidth: 4});
+                drawLandmarks(canvasCtx, results.poseLandmarks, {color: '#FF0000', lineWidth: 2});
+                
+                detectJumpingJack(results.poseLandmarks);
+            }
+            canvasCtx.restore();
+        }
+
+        const pose = new Pose({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
+
+        pose.setOptions({
+            modelComplexity: 1, // Full Balance
+            smoothLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        pose.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                canvasElement.width = videoElement.videoWidth;
+                canvasElement.height = videoElement.videoHeight;
+                await pose.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720
+        });
+
+        camera.start().then(() => {
+            statusElement.innerText = "Aktiv: 5 Hampelmänner zum Loggen";
+        });
+
+        function detectJumpingJack(landmarks) {
+            const nose = landmarks[0];
+            const leftWrist = landmarks[15];
+            const rightWrist = landmarks[16];
+            const leftAnkle = landmarks[27];
+            const rightAnkle = landmarks[28];
+            const leftHip = landmarks[23];
+            const rightHip = landmarks[24];
+
+            const now = Date.now();
+
+            // Sichtbarkeit prüfen (Ganzkörper erforderlich)
+            if (!leftWrist || !rightWrist || !leftAnkle || !rightAnkle || !leftHip || !rightHip ||
+                leftWrist.visibility < 0.6 || rightWrist.visibility < 0.6 ||
+                leftAnkle.visibility < 0.6 || rightAnkle.visibility < 0.6) {
+                if (now - lastActionTime > RESET_TIMEOUT_MS) resetCount();
+                return;
+            }
+
+            // 1. Arme: Hände über Schulter/Kopf (UP) vs Hände unten (DOWN)
+            const handsUp = (leftWrist.y < nose.y && rightWrist.y < nose.y);
+            
+            // 2. Beine: Abstand zwischen den Knöcheln im Vergleich zum Hüftabstand
+            const hipWidth = Math.abs(leftHip.x - rightHip.x);
+            const ankleDistance = Math.abs(leftAnkle.x - rightAnkle.x);
+            const legsSpread = (ankleDistance > hipWidth * 2.0);
+
+            // Hampelmann-Logik: Beine gespreizt UND Hände oben -> UP state
+            if (handsUp && legsSpread && currentState === "DOWN") {
+                currentState = "UP";
+                lastActionTime = now;
+            } 
+            // Beine zusammen UND Hände unten -> DOWN state (vollständiger Hampelmann)
+            else if (!handsUp && !legsSpread && currentState === "UP") {
+                currentState = "DOWN";
+                count++;
+                lastActionTime = now;
+                statusElement.innerText = `Hampelmänner: ${count} / 5`;
+            }
+
+            if (now - lastActionTime > RESET_TIMEOUT_MS) {
+                resetCount();
+            }
+
+            if (count >= 5) {
+                if (now - lastTriggerTime > 60000) {
+                    lastTriggerTime = now;
+                    triggerLog();
+                }
+                resetCount();
+            }
+        }
+
+        function resetCount() {
+            count = 0;
+            currentState = "DOWN";
+            statusElement.innerText = "Aktiv: 5 Hampelmänner zum Loggen";
+        }
+
+        async function triggerLog() {
+            alertElement.innerText = "🏁 ZIEL ERREICHT!";
+            alertElement.style.display = 'block';
+            setTimeout(() => alertElement.style.display = 'none', 3000);
+            
+            statusElement.innerText = "Logge...";
+            
+            const captureCanvas = document.createElement('canvas');
+            captureCanvas.width = videoElement.videoWidth;
+            captureCanvas.height = videoElement.videoHeight;
+            const ctx = captureCanvas.getContext('2d');
+            ctx.scale(-1, 1);
+            ctx.drawImage(videoElement, -captureCanvas.width, 0);
+            const image = captureCanvas.toDataURL('image/jpeg', 0.8);
+
+            try {
+                // Nutze den gleichen API-Endpunkt wie beim anderen Projekt (Vercel Backend)
+                const response = await fetch('https://lennarthuhn-github-io.vercel.app/api/log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image, trigger: 'jumping-jack' })
+                });
+                const result = await response.json();
+                statusElement.innerText = result.success ? "Erfolgreich geloggt!" : "Fehler beim Loggen";
+            } catch (e) {
+                statusElement.innerText = "Netzwerkfehler";
+            }
+            
+            setTimeout(() => statusElement.innerText = "Aktiv: 5 Hampelmänner zum Loggen", 5000);
+        }
+    </script>
+</body>
+</html>
