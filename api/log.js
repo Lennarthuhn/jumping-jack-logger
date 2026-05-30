@@ -45,7 +45,7 @@ module.exports = async (req, res) => {
     data: {
       cache_code: cacheCode,
       logtype: 'Found it',
-      comment: '👋 Automatisch geloggt via Pose Web App (Wink-Detektion)',
+      comment: '5 jumping jacks completed',
       comment_format: 'plaintext'
     },
   };
